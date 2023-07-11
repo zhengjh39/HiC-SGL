@@ -1,0 +1,19 @@
+{
+  "data_dir": "4dn_kim",
+  "genome_reference_path": "hg19.chrom.sizes",
+  "chrom_list": ["chr1","chr2","chr3","chr4","chr5",
+			  "chr6","chr7","chr8","chr9","chr10",
+			  "chr11","chr12","chr13","chr14","chr15",
+			  "chr16","chr17","chr18","chr19","chr20",
+			  "chr21","chr22","chrX"],
+  "resolution": 1000000,
+  "dense_thre" : [1000, 20000],
+  "cell_dim" : 64,
+  "node_dim" : 256,
+  "neg_num" : 1,
+  "drop_ratio": 0.1,
+  "batch_size": 2048,
+  "num_workers": 64,
+  "train_epoch": 10,
+  "pretrain_epoch": 20
+}
