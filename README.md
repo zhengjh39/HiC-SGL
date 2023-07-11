@@ -2,7 +2,7 @@
 
 Subgraph decomposition and graph representation learning for single cell Hi-C imputation and clustering.
 
-![model](C:\Users\93595\Pictures\model.png)
+![model](model.png)
 
 The structure of the **HiC-SGL** model. It consists of an encoder and a decoder. The encoder extracts the local feature of each edge and the global feature of the cell graph. The decoder estimates the likelihood of each edge being present in the cell map using the encoded feature.
 
