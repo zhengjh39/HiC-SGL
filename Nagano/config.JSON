@@ -1,0 +1,18 @@
+{
+  "data_dir": "Nagano",
+  "genome_reference_path": "Nango/chrom_sizes.txt",
+  "chrom_list": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+                 "11", "12", "13", "14", "15", "16", "17", "18", "19", 
+                 "X"],
+  "resolution": 250000,
+  "resolution_cell": 250000,
+  "dense_thre" : [20000, 400000],
+  "cell_dim" : 64,
+  "node_dim" : 256,
+  "neg_num" : 1,
+  "drop_ratio": 0.1,
+  "batch_size": 2048,
+  "num_workers": 64,
+  "train_epoch": 5,
+  "pretrain_epoch": 20
+}
