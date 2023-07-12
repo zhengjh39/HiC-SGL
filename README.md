@@ -99,7 +99,7 @@ Get the trained model parameters and save them in the dir/weight directory
 
 The utils module implements some methods for conveniently obtaining data, models, calling models for cell imputation, and obtaining cell embedding.
 
-| function         |description                              | parameters                                                         | return                                                        |
+| function         |description                              | args                                                         | return                                                        |
 | -------------- | --------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------- |
 | get_cells      | obtain cell map and cell features | **data_dir**(str): data directory path; **c** (int) chromosome number | cellgraph(list[torch_geometric.data]), cell feature(tensor) |
 | get_model      | obtain model                      | **data_dir**(str): data directory path;  **c** (int) chromosome number; **state**(str)( 'init', 'pretrained', 'trained'); **device**(str)：model device | model (torch.nn.Module)                                     |
