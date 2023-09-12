@@ -3,7 +3,7 @@ import os
 
 parser = argparse.ArgumentParser(description='str')
 parser.add_argument('--cuda', type = str, default = '0')
-parser.add_argument('--dir', type = str, default = 'Ram/')
+parser.add_argument('--dir', type = str, default = 'Ramani/')
 
 args = parser.parse_args()
 
@@ -15,6 +15,7 @@ from utils import *
 import Model 
 from DataGenerator import *
 import torch.nn as nn
+from tqdm import trange, tqdm
 if __name__ == '__main__':
     data_dir = args.dir
     print('GCL Pretrain on dataset', data_dir, 'CUDA', args.cuda)
