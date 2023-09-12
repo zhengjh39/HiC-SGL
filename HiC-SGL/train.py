@@ -28,7 +28,7 @@ if __name__ == '__main__':
     weight_path = os.path.join(data_dir, 'weight')
     if not os.path.exists(weight_path):
         os.mkdir(weight_path)
-    for c in range(len(config['chrom_list'])):
+    for c in range(22, len(config['chrom_list'])):
         print('Train on chrom', config['chrom_list'][c])
         cells, cell_feat = get_cells(data_dir, c)
 
