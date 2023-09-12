@@ -129,17 +129,21 @@ def pretrain_epoch(model, train_loader, opt,  device, epoch, show = True):
     loss = round(sum(losses)/len(losses), 4)
     if epoch % 5 == 0:
         print('epoch:',epoch, 'InfoNCE:', loss)
+    
+def raw_map(g):
+    _map = th.zeros(g.num_nodes, g.num_nodes)
+    _map[g.edge_index[0], g.edge_index[1]] = g.edge_attr
+    return _map
 
-def impute_cell(raw_cell, model):
+def impute_cell(raw_cell, model, neibor_limit):
     count = []
     edges = []
-    neibor_limit = get_neibor_limit(raw_cell)
     test_edge, test_label, train_pos = edgeData(raw_cell)
 
     train_set = GraphSet(raw_cell, neibor_limit, train_pos)
     for g in raw_cell:
         n = g.num_nodes
-        cell_id = th.tensor([g.cidx[0]]).repeat(n * n)
+        cell_id = g.cidx[0].repeat(n * n)
         t = th.tensor(range(n))
         u = t.repeat_interleave(n)
         v = t.repeat(n)
@@ -175,8 +179,6 @@ def impute_cell(raw_cell, model):
 
 def get_cell_embed(data_dir):
     cell_embed = []
-    chr_start_end = np.load(os.path.join(data_dir, 'chrom_start_end.npy'))
-    bin_num = chr_start_end[-1][1]
     with open(os.path.join(data_dir, 'config.JSON')) as f:
         config = json.load(f)
     for c in range(len(config['chrom_list'])):
@@ -186,6 +188,7 @@ def get_cell_embed(data_dir):
         neibor_limit = get_neibor_limit(cells)
         dim = config['node_dim']
         c_dim = config['cell_dim'] 
+        bin_num = cells[0].num_nodes
         model = Model.LinkPredictor(dim, 6, 4, sum(neibor_limit) + 2, c_dim, cell_feat, bin_num)
         weight_path = os.path.join(data_dir, 'weight', 'chr'+ str(c))
         model.load_state_dict(th.load(os.path.join(weight_path, str(config['train_epoch'] - 1))))
@@ -212,8 +215,7 @@ def get_cells(data_dir, c = 0):
 
 def get_model(data_dir, c = 0, state = 'init', device = 'cpu'):
     cells_c = th.load(os.path.join(data_dir, 'cellgraph', str(c)))
-    chr_start_end = np.load(os.path.join(data_dir, 'chrom_start_end.npy'))
-    bin_num = chr_start_end[-1][1]
+    bin_num = cells_c[0].num_nodes 
     with open(os.path.join(data_dir, 'config.JSON')) as f:
         config = json.load(f)
     neibor_limit = get_neibor_limit(cells_c)
