@@ -2,53 +2,77 @@ import torch_geometric.nn as gnn
 import torch.nn as nn
 import torch.nn.functional as F
 import torch as th 
-class FFN(nn.Module):
-    def __init__(self,dim):
-        super().__init__()
-        self.fc1 = nn.Linear(dim, dim)
-        self.fc2 = nn.Linear(dim, dim)
-    
-    def forward(self, x):
-        h = F.relu(self.fc1(x))
-        h = self.fc2(h)
-        return h
+import torch 
 
-class MHA(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim):
-        super().__init__()
-        self.Wq = nn.Linear(in_dim, hidden_dim, bias = False)
-        self.Wk = nn.Linear(in_dim, hidden_dim, bias = False)
-        self.Wv = nn.Linear(in_dim, out_dim, bias = False)
-
-    def forward(self, H, bias, mask):
-        Q, K, V = self.Wq(H), self.Wk(H), self.Wv(H)
-        d = Q.shape[-1]
-        atn = Q @ K.transpose(1,2) / d ** (1/2)
+class FFN(torch.nn.Module):
+    def __init__(self, embed_size, ff_hidden_size = None):
+        super(FFN, self).__init__()
+        if not ff_hidden_size:
+            ff_hidden_size = embed_size
+        self.fc1 = torch.nn.Linear(embed_size, ff_hidden_size)
+        self.fc2 = torch.nn.Linear(ff_hidden_size, embed_size)
         
-        atn = atn + bias 
-        atn[mask == 0] = -(1e10)
-        atn = th.softmax(atn ,dim = -1)
-        return atn @ V
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+class MHA(torch.nn.Module):
+    def __init__(self, embed_size, heads):
+        super(MHA, self).__init__()
+        self.embed_size = embed_size
+        self.heads = heads
+        self.head_dim = embed_size // heads
+        
+        assert (
+            self.head_dim * heads == embed_size
+        ), "Embedding size needs to be divisible by heads"
+        
+        self.values = torch.nn.Linear(embed_size, self.head_dim * heads)
+        self.keys = torch.nn.Linear(embed_size, self.head_dim * heads)
+        self.queries = torch.nn.Linear(embed_size, self.head_dim * heads)
+        
+        self.fc_out = torch.nn.Linear(heads * self.head_dim, embed_size)
+        
+    def split_heads(self, x, batch_size):
+        x = x.view(batch_size, -1, self.heads, self.head_dim)
+        return x.permute(2, 0, 1, 3)
+        
+    def forward(self, x, bias, mask): # x(b, n, d), bias, mask(b, n, n)
+        batch_size = x.shape[0]
+        
+        values = self.split_heads(self.values(x), batch_size)
+        keys = self.split_heads(self.keys(x), batch_size)
+        queries = self.split_heads(self.queries(x), batch_size)
+        #q(h, b, n, d/h), k(h, b, n, d/h), v(h, b, n, d/h)
+        attention_scores = torch.matmul(queries, keys.permute(0, 1, 3, 2))#(h, b, n, n)
+        attention_scores = attention_scores + bias
+        attention_scores = attention_scores.masked_fill(mask == 0, float("-1e20"))
+        #attn(b, h, n, n)
+        attention_probs = F.softmax(attention_scores / (self.head_dim ** 0.5), dim=-1)
+        #ATN.append(attention_probs)
+        output = torch.matmul(attention_probs, values)#attn(h, b, n, d/h)
+        output = output.permute(1, 2, 0, 3).contiguous().view(batch_size, -1, self.heads * self.head_dim)
+        return self.fc_out(output)
 
 class GT(nn.Module):
     def __init__(self, dim, head):
         super().__init__()
-        self.ln1 = nn.LayerNorm(dim)
-        self.MHAs = nn.ModuleList([MHA(dim, dim//head, dim//head) for i in range(head)])
-        self.h = head 
-        self.ln2 = nn.LayerNorm(dim)
+        self.norm1 = nn.LayerNorm(dim)
+        self.MHA = MHA(dim, head)
+        self.norm2 = nn.LayerNorm(dim)
         self.ffn = FFN(dim)
-        self.fc = nn.Linear(dim, dim, bias = False)
 
-    def forward(self, H,  bias, mask):
-        H =  self.ln1(H)
-        Hs = []
-        for mha in self.MHAs:
-            Hs.append(mha(H, bias, mask))
-        H = H + self.fc(th.cat(Hs, dim = -1))
-        H = self.ffn(self.ln2(H)) + H
-
-        return H
+    def forward(self, x, bias, mask):
+        x_normalized = self.norm1(x)
+        attention_output = self.MHA(x_normalized, bias, mask)
+        x = x + attention_output
+        
+        x_normalized = self.norm2(x)
+        feed_forward_output = self.ffn(x_normalized)
+        x = x + feed_forward_output
+        
+        return x
     
 class V_feat(nn.Module):
     def __init__(self, v_dim, node_num, bin_num):
@@ -74,13 +98,10 @@ class E_feat(nn.Module):
                                  nn.Linear(edge_num, edge_num), nn.LayerNorm(edge_num))
 
     def forward(self, Data):
-        
         edge_num = self.node  * self.node 
-
         dist = Data['dist'].float().view(-1, edge_num)
-        
         bias = th.tanh(self.mlp(dist)).view(-1, self.node, self.node)
-
+        #BIAS.append(bias)
         return bias 
 
 class SubEncoder(nn.Module):
@@ -115,8 +136,8 @@ class CellEncoder(nn.Module):
         cell_embed = self.mlp(cell_feat)
    
         return cell_embed 
-
     
+
 class LinkPredictor(nn.Module):
     def __init__(self, dim, layer, head, node_num, cdim, cell_feat, bin_num):
         super().__init__()
@@ -145,3 +166,4 @@ class LinkPredictor(nn.Module):
         
         y =  self.decoder(th.cat([global_embed, local_embed[:, 0], local_embed[:, 1]], dim = -1) )
         return y.view(-1)
+
