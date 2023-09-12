@@ -144,6 +144,12 @@ def draw(g):
     networkx.draw(g, with_labels = True, labels = label)
     plt.show()
 
+import random
+def random_choice(iterable, n):
+    reservoir = list(iterable)
+    random.shuffle(reservoir)
+    return reservoir[: n]
+
 from time import time  
 class GraphSet(Dataset):
     def __init__(self, graph, nlimit, edge, label = None, pretrain = False):
@@ -168,6 +174,14 @@ class GraphSet(Dataset):
         edge_index = g.edge_index[:, train_mask]
         edge_attr = g.edge_attr[train_mask]
         
+        row, col = edge_index
+        edge_index = edge_index[:, (col - row) > 1]
+        edge_attr = edge_attr[(col - row) > 1]
+        next_link = [list(range(g.num_nodes - 1)), list(range(1, g.num_nodes))]
+        next_link = th.tensor(next_link)
+        edge_index = th.cat([edge_index, next_link], dim = 1)
+        edge_attr = th.cat([edge_attr, th.ones(next_link.shape[1])])
+
         num_nodes = g.num_nodes
         m = (edge_index[0] != u ) | (edge_index[1] != v)
         edge_index = edge_index[:, m]
@@ -178,19 +192,22 @@ class GraphSet(Dataset):
         row, col = edge_index
         node_mask = row.new_empty(num_nodes, dtype=th.bool)
         edge_mask = row.new_empty(row.size(0), dtype=th.bool)
-        subsets = [node_idx]
+
+        subsets = node_idx
+        add_set = subsets
 
         for i in range(len(nlimit)):
             node_mask.fill_(False)
-            node_mask[subsets[-1]] = True
+            node_mask[add_set] = True
             th.index_select(node_mask, 0, row, out = edge_mask)
             add_set = col[edge_mask]
-            idx = list(range(add_set.shape[0]))
-            subsets.append(add_set[idx[: nlimit[i]]])
+            add_set = set(add_set.tolist()) - set(subsets.tolist())
+            add_set = random_choice(add_set, nlimit[i])
+            add_set = th.tensor(list(add_set))
+            #print(th.unique(add_set))
+            subsets = th.cat([subsets, add_set])
         
-        sub = th.cat(subsets).unique()
-        sub = sub[(sub != u) & (sub != v)]
-        sub = th.cat([node_idx, sub])
+        sub = subsets
         node_mask.fill_(False)
         node_mask[sub] = True 
         edge_mask = node_mask[edge_index[0]] & node_mask[edge_index[1]]
@@ -198,7 +215,7 @@ class GraphSet(Dataset):
         edge_attr = edge_attr[edge_mask]
         rp = th.ones(num_nodes).long()
         rp[sub] = th.tensor(range(sub.shape[0]))
-        edge_index.apply_(lambda d: rp[d])    
+        edge_index = rp[edge_index]  
         subg = Data(vidx = g.vidx[sub], edge_index = edge_index, edge_attr = edge_attr, 
                     cidx = g.cidx, num_nodes = len(sub))
         return subg 
@@ -213,7 +230,7 @@ class GraphSet(Dataset):
 
         return trans(subg, maxnode), self.label[idx]
 
-
+from HicProcess import negsample
 class NegSet(Dataset):
     def __init__(self, graph, neg_num):
         self.graph = graph
@@ -228,21 +245,12 @@ class NegSet(Dataset):
         train_mask = mask < 1 - g.drop_ratio
         train_pos = g.edge_index[:, train_mask]
         u, v = train_pos
-        ex_u = th.cat([u, u])
-        t1, t2 = u.clone() + 1, u.clone() - 1
-        t1[t1 >= n] = n - 1
-        t2[t2 < 0] = 0
-        ex_v = th.cat([t1, t2])
-        ex_edge = th.stack([ex_u, ex_v], dim = 0)
+
+        ex_edge = th.stack([u, u + 1], dim = 0)
+        #edge_index = th.cat([g.A_edge_index, g.test_neg, ex_edge], dim = 1)
         edge_index = th.cat([g.edge_index, g.test_neg, ex_edge], dim = 1)
-        adj = coo_matrix((th.ones(edge_index.shape[1]), (edge_index[0], edge_index[1])), shape = (n, n))
-        adj = adj.toarray()
-        score = np.ones((n, n))
-        score = np.triu(score, 1)
-        score[adj > 0] = 0
-        if score.sum() == 0:
-            return th.tensor([])
-        train_neg = negsample_score(score, train_pos.shape[1] * self.neg_num )
+        
+        train_neg = negsample(n, self.neg_num * train_pos.shape[1], edge_index)
         u = train_neg[0]
         v = train_neg[1] 
         cell_id = th.tensor([idx]).repeat(u.shape[0])
