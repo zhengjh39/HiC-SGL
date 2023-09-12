@@ -10,6 +10,7 @@ from scipy.sparse import coo_matrix
 from sklearn.decomposition import PCA, TruncatedSVD
 from tqdm import trange, tqdm
 import matplotlib.pyplot as plt 
+import random 
 def generate_chrom_start_end(config):
     # fetch info from config
 	genome_reference_path = config['genome_reference_path']
@@ -114,6 +115,24 @@ def negsample_score(score, size):
     neg = np.stack([i, j])
     return th.from_numpy(neg)
 
+def negsample(n, size, pos):
+    if size == 0:
+        return th.tensor([[], []])
+    
+    pos = set([tuple(x) for x in pos.numpy().T])
+    neg = []
+    while len(neg) < size:
+        i = np.random.randint(0, n)
+        j = np.random.randint(0, n)
+        #如果 i > j, 交换i, j的值
+        if i > j:
+            i, j = j, i
+        if (i, j) not in pos:
+            neg.append((i, j))
+
+    return th.tensor(neg).T
+
+
 def prepare_data(data_dir, dense_thre = [-1, -1], c = 0, neg_num = 5, drop_ratio = 0.1, config = None):
     data = np.load(os.path.join(data_dir, 'data.npy'))
     chr_start_end = np.load(os.path.join(data_dir, 'chrom_start_end.npy'))
@@ -176,21 +195,15 @@ def prepare_data(data_dir, dense_thre = [-1, -1], c = 0, neg_num = 5, drop_ratio
                 tmp.edge_index = th.stack((x[:,2] - start, x[:,3] - start))
                 
             tmp.num_nodes = bin_num
-            tmp.vidx = th.tensor(range(start, end))
+            tmp.vidx = th.tensor(range(bin_num))
             tmp.cidx = th.tensor([idx, c])
             tmp.edge_attr = w
             tmp.label = l
             tmp.emask = th.rand(tmp.edge_index.shape[1])
+            
             tmp.drop_ratio = drop_ratio
             test_pos = tmp.edge_index[:, tmp.emask >= (1 - drop_ratio)]
-            adj = coo_matrix((w, (tmp.edge_index[0], tmp.edge_index[1])), shape = (bin_num, bin_num))
-            adj = adj.toarray()
-            score = th.ones((bin_num, bin_num))
-            score = th.triu(score, 1)
-            score[adj > 0] = 0
-
-            test_neg = negsample_score(score, test_pos.shape[1] * neg_num)
-            tmp.test_neg = test_neg
+            tmp.test_neg = negsample(bin_num, neg_num * test_pos.shape[1] , tmp.edge_index)
             
             return tmp
         
@@ -201,6 +214,106 @@ def prepare_data(data_dir, dense_thre = [-1, -1], c = 0, neg_num = 5, drop_ratio
     for batch in loader:
         for g in batch:
              cells.append(g.clone())
+    
+    graphpath = os.path.join(data_dir, 'cellgraph')
+    if not os.path.exists(os.path.join(data_dir, 'cellgraph')):
+        os.mkdir(graphpath)
+    th.save(cells, os.path.join(graphpath, str(c)))
+    return cells
+
+def prepare_data_normal(data_dir, dense_thre = [-1, -1], c = 0, neg_num = 5, drop_ratio = 0.1, config = None):
+    data = np.load(os.path.join(data_dir, 'data.npy'))
+    chr_start_end = np.load(os.path.join(data_dir, 'chrom_start_end.npy'))
+    weight = np.load(os.path.join(data_dir, 'weight.npy'))
+    label_path = os.path.join(data_dir, 'label_info.pickle')
+    label = np.zeros(max(data[:, 0]) + 1)
+    sample_num = 150
+
+    if os.path.exists(label_path):
+         label = pd.read_pickle(label_path)['cell type']
+    start = chr_start_end[c][0]
+    end = chr_start_end[c][1]
+    bin_num = end - start
+    mask = (data[:, 2] != data[:, 3])
+    x = th.from_numpy(data[mask])
+    weight = th.from_numpy(weight[mask])     
+    t, sp = th.unique(x[:, 0], return_counts = True)
+    sp = sp.tolist()
+    weight = th.split(weight, sp)
+    cells = th.split(x, sp)
+
+    if config and 'cell type' in config:
+        weight = [weight[i] for i in range(len(cells)) if label[cells[i][0][0]] in config['cell type']]
+        cells = [cells[i] for i in range(len(cells)) if label[cells[i][0][0]] in config['cell type']]
+        label = [l for l in label if l in config['cell type']]
+ 
+    pair_num = th.tensor([w.sum() for w in weight])
+    dtmax = dense_thre[1]  if dense_thre[1] != -1 else 1e10
+    #print(np.percentile(pair_num.numpy(), 50))
+    cidx = th.argwhere( (pair_num > dense_thre[0]) & (pair_num < dtmax) ).view(-1)
+    #cidx = th.argwhere(pair_num > dense_thre[0]).view(-1)
+
+    cells = [cells[i] for i in cidx]
+    weight = [weight[i] for i in cidx]
+    label = [label[i] for i in cidx]
+    pair_num = [pair_num[i] for i in cidx]
+    #print(np.percentile(pair_num, 50))
+    for i in range(len(cells)):
+        mask = cells[i][:, 1] == c 
+        cells[i] = cells[i][mask]
+        weight[i] = weight[i][mask]
+
+    class cellset(Dataset):
+        def __init__(self, x, w, l):
+            super(Dataset, self).__init__()
+            self.x = x
+            self.w = w
+            self.l = l
+        def __len__(self):
+            return len(self.x)
+        
+        def __getitem__(self, idx):
+            x = self.x[idx]
+            w = self.w[idx]
+            l = self.l[idx]
+            
+            tmp = Data()
+            if x.shape == 0:
+                tmp.A_edge_index = th.tensor([[], []])
+            else:
+                tmp.A_edge_index = th.stack((x[:,2] - start, x[:,3] - start))
+                 
+            _idx = list(range(tmp.A_edge_index.shape[1]))
+            random.shuffle(_idx)
+            tmp.edge_index = tmp.A_edge_index[:, _idx[:sample_num]]
+            tmp.edge_attr = w[_idx[:sample_num]]
+            #tmp.edge_index = tmp.A_edge_index[:, th.randperm(tmp.A_edge_index.shape[1])[:sample_num]]
+        
+            tmp.num_nodes = bin_num
+            tmp.vidx = th.tensor(range(bin_num))
+            #tmp.cidx = th.tensor([idx, c])
+            #tmp.edge_attr = w
+            tmp.label = l
+            tmp.emask = th.rand(tmp.edge_index.shape[1])
+            
+            tmp.drop_ratio = drop_ratio
+            test_pos = tmp.edge_index[:, tmp.emask >= (1 - drop_ratio)]
+            tmp.test_neg = negsample(bin_num, neg_num * test_pos.shape[1] , tmp.A_edge_index)
+            
+            return tmp
+        
+    dataset =  cellset(cells, weight, label)
+    loader = DataLoader(dataset, 32, shuffle=False, num_workers= 64, collate_fn = lambda d: d)
+    #print(next(iter(loader)))
+    cells = []
+    for batch in loader:
+        for g in batch:
+             cells.append(g.clone())
+    cells = [g for g in cells if g.edge_index.shape[1] == sample_num]
+    random.shuffle(cells)
+    cells = cells[:500]
+    for i in range(len(cells)):
+        cells[i].cidx = th.tensor([i, c])
     
     graphpath = os.path.join(data_dir, 'cellgraph')
     if not os.path.exists(os.path.join(data_dir, 'cellgraph')):
@@ -242,7 +355,11 @@ if __name__ == '__main__':
     with open(os.path.join(data_dir, 'config.JSON')) as f:
         config = json.load(f)
     print('Process raw data...')
-    process_raw(config)
+    if not os.path.exists(os.path.join(data_dir, 'data.npy')):
+        process_raw(config)
+    else:
+        print('Detected that data has been processed. Skip this step.')
+
     print('Translate triplet table to Graph and generate cell feature...')
     for c in trange(len(config['chrom_list'])):
         cells = prepare_data(data_dir, config['dense_thre'], c, 5, config['drop_ratio'], config)
